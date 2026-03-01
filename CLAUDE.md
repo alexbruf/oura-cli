@@ -10,20 +10,18 @@ bun install
 
 ### Authentication
 
-**Option 1: OAuth2 (recommended)**
+Run the interactive setup:
 ```bash
-export OURA_CLIENT_ID=your_client_id
-export OURA_CLIENT_SECRET=your_client_secret
-oura login
-```
-This opens a browser for OAuth2 authorization. Tokens are saved to `~/.oura-cli/tokens.json` and auto-refresh when expired.
-
-**Option 2: Personal access token (legacy)**
-```bash
-export OURA_ACCESS_TOKEN=your_token
+oura setup
 ```
 
-Token resolution order: `OURA_ACCESS_TOKEN` env var > stored OAuth2 tokens.
+This lets you choose between:
+1. **Personal Access Token** — paste your token, saved to config
+2. **OAuth2** — enter client ID + secret, then log in via browser
+
+Config is stored at `~/.config/oura-cli/config.json`. OAuth2 tokens auto-refresh.
+
+Env var `OURA_ACCESS_TOKEN` overrides config if set.
 
 ## Build
 
@@ -42,6 +40,7 @@ All commands default to the last 7 days. Heart rate uses `--start-datetime` / `-
 
 ## Commands
 
+- `setup` — configure authentication (interactive)
 - `login` — authenticate via OAuth2 (opens browser)
 - `logout` — remove stored OAuth2 tokens
 - `personal-info` — age, weight, height, sex, email
@@ -66,4 +65,4 @@ All commands default to the last 7 days. Heart rate uses `--start-datetime` / `-
 
 Single-file CLI at `src/index.ts`. No dependencies beyond Bun builtins.
 All output is human-readable plain text, designed for AI agent consumption.
-OAuth2 tokens stored at `~/.oura-cli/tokens.json`.
+Config and tokens stored at `~/.config/oura-cli/`.

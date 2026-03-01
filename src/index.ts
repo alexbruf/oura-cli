@@ -8,10 +8,34 @@ const OAUTH_AUTHORIZE_URL = "https://cloud.ouraring.com/oauth/authorize";
 const OAUTH_TOKEN_URL = "https://api.ouraring.com/oauth/token";
 const OAUTH_SCOPES = "email personal daily heartrate workout tag session spo2";
 const CALLBACK_PORT = 8787;
-const TOKEN_DIR = join(homedir(), ".oura-cli");
-const TOKEN_FILE = join(TOKEN_DIR, "tokens.json");
+const CONFIG_DIR = join(homedir(), ".config", "oura-cli");
+const CONFIG_FILE = join(CONFIG_DIR, "config.json");
+const TOKEN_FILE = join(CONFIG_DIR, "tokens.json");
 
 // ── Token Storage ─────────────────────────────────────────────────────
+
+interface Config {
+  auth_method: "pat" | "oauth2";
+  access_token?: string;
+  client_id?: string;
+  client_secret?: string;
+}
+
+async function loadConfig(): Promise<Config | null> {
+  try {
+    const file = Bun.file(CONFIG_FILE);
+    if (!(await file.exists())) return null;
+    return await file.json();
+  } catch {
+    return null;
+  }
+}
+
+async function saveConfig(config: Config): Promise<void> {
+  const { mkdirSync } = await import("fs");
+  mkdirSync(CONFIG_DIR, { recursive: true });
+  await Bun.write(CONFIG_FILE, JSON.stringify(config, null, 2));
+}
 
 interface StoredTokens {
   access_token: string;
@@ -31,7 +55,7 @@ async function loadStoredTokens(): Promise<StoredTokens | null> {
 
 async function saveTokens(tokens: StoredTokens): Promise<void> {
   const { mkdirSync } = await import("fs");
-  mkdirSync(TOKEN_DIR, { recursive: true });
+  mkdirSync(CONFIG_DIR, { recursive: true });
   await Bun.write(TOKEN_FILE, JSON.stringify(tokens, null, 2));
 }
 
@@ -45,13 +69,7 @@ async function deleteTokens(): Promise<void> {
 }
 
 async function refreshAccessToken(refreshToken: string): Promise<StoredTokens> {
-  const clientId = process.env.OURA_CLIENT_ID;
-  const clientSecret = process.env.OURA_CLIENT_SECRET;
-  if (!clientId || !clientSecret) {
-    console.error("Error: OURA_CLIENT_ID and OURA_CLIENT_SECRET are required to refresh tokens.");
-    console.error("Set them or run 'oura login' again.");
-    process.exit(1);
-  }
+  const { clientId, clientSecret } = await getOAuthCredentials();
 
   const res = await fetch(OAUTH_TOKEN_URL, {
     method: "POST",
@@ -81,15 +99,53 @@ async function refreshAccessToken(refreshToken: string): Promise<StoredTokens> {
   return stored;
 }
 
+async function getOAuthCredentials(): Promise<{ clientId: string; clientSecret: string }> {
+  const clientId = process.env.OURA_CLIENT_ID;
+  const clientSecret = process.env.OURA_CLIENT_SECRET;
+  if (clientId && clientSecret) return { clientId, clientSecret };
+
+  const config = await loadConfig();
+  if (config?.auth_method === "oauth2" && config.client_id && config.client_secret) {
+    return { clientId: config.client_id, clientSecret: config.client_secret };
+  }
+
+  throw new Error(
+    "OAuth2 client credentials not found.\nRun 'oura setup' to configure or set OURA_CLIENT_ID and OURA_CLIENT_SECRET."
+  );
+}
+
 async function getToken(): Promise<string> {
   // 1. Check env var first
   const envToken = process.env.OURA_ACCESS_TOKEN;
   if (envToken) return envToken;
 
-  // 2. Check stored OAuth2 tokens
+  // 2. Check config file
+  const config = await loadConfig();
+  if (config) {
+    // PAT from config
+    if (config.auth_method === "pat" && config.access_token) {
+      return config.access_token;
+    }
+
+    // OAuth2 from stored tokens
+    if (config.auth_method === "oauth2") {
+      const stored = await loadStoredTokens();
+      if (stored) {
+        if (Date.now() >= stored.expires_at - 60_000) {
+          const refreshed = await refreshAccessToken(stored.refresh_token);
+          return refreshed.access_token;
+        }
+        return stored.access_token;
+      }
+      throw new Error(
+        "OAuth2 configured but not logged in.\nRun 'oura login' to authenticate."
+      );
+    }
+  }
+
+  // 3. Legacy: check for stored tokens without config (backwards compat)
   const stored = await loadStoredTokens();
   if (stored) {
-    // Auto-refresh if expired (with 60s buffer)
     if (Date.now() >= stored.expires_at - 60_000) {
       const refreshed = await refreshAccessToken(stored.refresh_token);
       return refreshed.access_token;
@@ -98,7 +154,7 @@ async function getToken(): Promise<string> {
   }
 
   throw new Error(
-    "No authentication found.\nEither set OURA_ACCESS_TOKEN or run 'oura login' for OAuth2."
+    "No authentication found.\nRun 'oura setup' to configure authentication."
   );
 }
 
@@ -591,18 +647,87 @@ function daysAgo(n: number): string {
   return d.toISOString().slice(0, 10);
 }
 
+// ── Interactive Setup ─────────────────────────────────────────────────
+
+const _stdinLines: string[] = [];
+let _stdinDone = false;
+let _stdinWaiter: ((line: string) => void) | null = null;
+
+function _initStdin() {
+  if (_stdinDone) return;
+  _stdinDone = true;
+  const rl = require("readline").createInterface({ input: process.stdin });
+  rl.on("line", (line: string) => {
+    if (_stdinWaiter) {
+      const w = _stdinWaiter;
+      _stdinWaiter = null;
+      w(line.trim());
+    } else {
+      _stdinLines.push(line.trim());
+    }
+  });
+}
+
+function prompt(question: string): Promise<string> {
+  _initStdin();
+  process.stdout.write(question);
+  if (_stdinLines.length > 0) {
+    return Promise.resolve(_stdinLines.shift()!);
+  }
+  return new Promise((resolve) => {
+    _stdinWaiter = resolve;
+  });
+}
+
+async function handleSetup(): Promise<void> {
+  console.log("oura setup — configure authentication\n");
+  console.log("  1) Personal Access Token (paste a token)");
+  console.log("  2) OAuth2 (client ID + secret, opens browser to log in)\n");
+
+  const choice = await prompt("Auth method [1/2]: ");
+
+  if (choice === "1") {
+    const token = await prompt("Personal Access Token: ");
+    if (!token) {
+      console.error("No token provided.");
+      process.exit(1);
+    }
+    await saveConfig({ auth_method: "pat", access_token: token });
+    console.log("\nConfig saved to ~/.config/oura-cli/config.json");
+    console.log("You're all set — try 'oura personal-info'.");
+  } else if (choice === "2") {
+    console.log("\nRegister an app at https://cloud.ouraring.com/oauth/applications");
+    console.log("Set the redirect URI to: http://localhost:8787/callback\n");
+    const clientId = await prompt("Client ID: ");
+    const clientSecret = await prompt("Client Secret: ");
+    if (!clientId || !clientSecret) {
+      console.error("Both client ID and secret are required.");
+      process.exit(1);
+    }
+    await saveConfig({ auth_method: "oauth2", client_id: clientId, client_secret: clientSecret });
+    console.log("\nConfig saved to ~/.config/oura-cli/config.json");
+
+    const loginNow = await prompt("Log in now? [Y/n]: ");
+    if (!loginNow || loginNow.toLowerCase() === "y" || loginNow.toLowerCase() === "yes") {
+      await handleLogin();
+    } else {
+      console.log("Run 'oura login' when you're ready to authenticate.");
+    }
+  } else {
+    console.error("Invalid choice. Run 'oura setup' again.");
+    process.exit(1);
+  }
+}
+
 // ── OAuth2 Login ──────────────────────────────────────────────────────
 
 async function handleLogin(): Promise<void> {
-  const clientId = process.env.OURA_CLIENT_ID;
-  const clientSecret = process.env.OURA_CLIENT_SECRET;
-
-  if (!clientId || !clientSecret) {
-    console.error("Error: OURA_CLIENT_ID and OURA_CLIENT_SECRET environment variables are required.");
-    console.error("Get them from https://cloud.ouraring.com/oauth/applications");
-    console.error("");
-    console.error("  export OURA_CLIENT_ID=your_client_id");
-    console.error("  export OURA_CLIENT_SECRET=your_client_secret");
+  let clientId: string, clientSecret: string;
+  try {
+    ({ clientId, clientSecret } = await getOAuthCredentials());
+  } catch {
+    console.error("Error: OAuth2 credentials not found.");
+    console.error("Run 'oura setup' first, or set OURA_CLIENT_ID and OURA_CLIENT_SECRET env vars.");
     process.exit(1);
   }
 
@@ -688,8 +813,8 @@ async function handleLogin(): Promise<void> {
   };
   await saveTokens(stored);
 
-  console.log("Logged in successfully! Tokens saved to ~/.oura-cli/tokens.json");
-  console.log("You can now use any oura command without setting OURA_ACCESS_TOKEN.");
+  console.log("Logged in successfully! Tokens saved to ~/.config/oura-cli/tokens.json");
+  console.log("You can now use any oura command.");
 }
 
 async function handleLogout(): Promise<void> {
@@ -703,6 +828,7 @@ function printHelp() {
   console.log("oura — CLI for Oura Ring API v2\n");
   console.log("Usage: oura <command> [options]\n");
   console.log("Auth Commands:");
+  console.log("  setup                    Configure authentication (interactive)");
   console.log("  login                    Authenticate via OAuth2 (opens browser)");
   console.log("  logout                   Remove stored OAuth2 tokens");
   console.log("");
@@ -719,13 +845,9 @@ function printHelp() {
   console.log("  --end-datetime YYYY-MM-DDTHH:MM:SS     End datetime");
   console.log("\nPagination:");
   console.log("  --next-token TOKEN         Fetch next page of results");
-  console.log("\nAuthentication (in priority order):");
-  console.log("  1. OURA_ACCESS_TOKEN env var (legacy personal access token)");
-  console.log("  2. OAuth2 tokens via 'oura login' (recommended, auto-refreshes)");
-  console.log("\nOAuth2 Setup:");
-  console.log("  OURA_CLIENT_ID             Your OAuth2 app client ID");
-  console.log("  OURA_CLIENT_SECRET         Your OAuth2 app client secret");
-  console.log("  Register at https://cloud.ouraring.com/oauth/applications");
+  console.log("\nAuthentication:");
+  console.log("  Run 'oura setup' to configure. Config saved at ~/.config/oura-cli/");
+  console.log("  Env var OURA_ACCESS_TOKEN overrides config if set.");
 }
 
 async function main() {
@@ -737,6 +859,11 @@ async function main() {
   }
 
   const commandName = args[0];
+
+  if (commandName === "setup") {
+    await handleSetup();
+    process.exit(0);
+  }
 
   if (commandName === "login") {
     await handleLogin();

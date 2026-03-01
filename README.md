@@ -10,25 +10,15 @@ bun install
 
 ### Authentication
 
-**Option 1: OAuth2 (recommended)**
-
-Register an app at [cloud.ouraring.com/oauth/applications](https://cloud.ouraring.com/oauth/applications), then:
-
 ```bash
-export OURA_CLIENT_ID=your_client_id
-export OURA_CLIENT_SECRET=your_client_secret
-oura login
+oura setup
 ```
 
-This opens your browser for authorization. Tokens are saved locally and auto-refresh when expired.
+The interactive setup lets you choose between:
+1. **Personal Access Token** — paste your token from [cloud.ouraring.com/personal-access-tokens](https://cloud.ouraring.com/personal-access-tokens)
+2. **OAuth2** — register an app at [cloud.ouraring.com/oauth/applications](https://cloud.ouraring.com/oauth/applications), enter your client ID + secret, then authorize in the browser
 
-**Option 2: Personal access token (legacy)**
-
-```bash
-export OURA_ACCESS_TOKEN=your_token
-```
-
-Get your token at https://cloud.ouraring.com/personal-access-tokens
+Config is saved to `~/.config/oura-cli/config.json`. No env vars needed after setup.
 
 ### Run
 
@@ -46,8 +36,8 @@ bun run build
 ## Examples
 
 ```bash
-# Log in via OAuth2
-oura login
+# Interactive auth setup
+oura setup
 
 # Last 7 days of sleep scores
 oura daily-sleep
@@ -67,10 +57,10 @@ oura logout
 
 ## Environment
 
-| Variable | Required | Description |
-|---|---|---|
-| `OURA_CLIENT_ID` | For OAuth2 | Your OAuth2 app client ID |
-| `OURA_CLIENT_SECRET` | For OAuth2 | Your OAuth2 app client secret |
-| `OURA_ACCESS_TOKEN` | Alternative | Personal access token (legacy) |
+Config is stored at `~/.config/oura-cli/` after running `oura setup`. Env vars are optional overrides:
 
-Authentication priority: `OURA_ACCESS_TOKEN` env var > stored OAuth2 tokens (`~/.oura-cli/tokens.json`).
+| Variable | Description |
+|---|---|
+| `OURA_ACCESS_TOKEN` | Overrides config token if set |
+| `OURA_CLIENT_ID` | Overrides config OAuth2 client ID |
+| `OURA_CLIENT_SECRET` | Overrides config OAuth2 client secret |

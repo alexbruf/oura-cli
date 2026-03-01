@@ -8,20 +8,11 @@ You have access to the `oura` CLI for querying Oura Ring API v2 data. All output
 
 ## Prerequisites
 
-Authentication is needed. Check in this order:
-
-1. **OAuth2 tokens** (recommended): If `oura` commands fail with auth errors, tell the user to run `oura login` (requires `OURA_CLIENT_ID` and `OURA_CLIENT_SECRET` env vars).
-2. **Personal access token** (legacy): The `OURA_ACCESS_TOKEN` environment variable can be set instead.
-
+Authentication is needed. If commands fail with auth errors, tell the user to run:
 ```bash
-# OAuth2 login (recommended)
-export OURA_CLIENT_ID=your_client_id
-export OURA_CLIENT_SECRET=your_client_secret
-oura login
-
-# Or legacy token
-export OURA_ACCESS_TOKEN=your_token
+oura setup
 ```
+This interactively configures either a Personal Access Token or OAuth2. Config is saved at `~/.config/oura-cli/config.json`.
 
 ## Available Commands
 
@@ -29,6 +20,7 @@ All commands default to the last 7 days. Use `--start-date` and `--end-date` to 
 
 | Command | What it returns |
 |---|---|
+| `oura setup` | Configure authentication (interactive) |
 | `oura login` | Authenticate via OAuth2 (opens browser) |
 | `oura logout` | Remove stored OAuth2 tokens |
 | `oura personal-info` | Age, weight, height, sex, email |
